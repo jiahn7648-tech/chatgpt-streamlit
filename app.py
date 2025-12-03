@@ -1,45 +1,53 @@
 import streamlit as st
+import google.generativeai as genai
 
-st.set_page_config(page_title="Simple Chat App", layout="centered")
+st.set_page_config(page_title="Gemini Chatbot", layout="centered")
 
-st.title("🟦 ChatGPT 스타일 로컬 채팅앱 (API 없이)")
+st.title("🟦 Gemini API 기반 챗봇")
 
-# 설명
 st.write("""
-이 버전은 **OpenAI API 없이도** 동작하는 **가짜(로컬 시뮬레이션) 챗봇**입니다.
+이 앱은 **Google Gemini API**를 사용하여 동작합니다.
 
-👉 실제 ChatGPT처럼 동작하진 않지만, **웹 인터페이스 + 채팅 UI + 대화기록**은 그대로 구현됩니다.
-
-나중에 API 키가 생기면 아주 쉽게 실제 모델로 교체할 수 있도록 코드 구조도 깔끔하게 만들어져 있습니다.
+👉 사용 전 반드시 Streamlit Secrets에 다음을 추가해야 합니다:
+```
+GEMINI_API_KEY = "당신의 키"
+```
 """)
+
+# API 설정
+import os
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # 세션 초기화
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# 채팅 출력
 st.subheader("💬 대화 내용")
 for role, msg in st.session_state.history:
     if role == "user":
         st.markdown(f"**👤 사용자:** {msg}")
     else:
-        st.markdown(f"**🤖 봇:** {msg}")
+        st.markdown(f"**🤖 Gemini:** {msg}")
 
-# 입력창
 user_input = st.text_input("메시지를 입력하세요:")
 
-# 응답 생성(로컬 시뮬레이션)
-def fake_ai_response(text):
-    return f"'{text}' 라고 하셨군요! 아직 API 키가 없어서 제가 직접 대답하는 척 하는 중입니다 🙂"
+# Gemini 답변 생성 함수
+def get_gemini_reply(text):
+    response = model.generate_content(text)
+    return response.text
 
 # 전송 버튼
 if st.button("전송") and user_input:
     st.session_state.history.append(("user", user_input))
-    bot_reply = fake_ai_response(user_input)
+    try:
+        bot_reply = get_gemini_reply(user_input)
+    except Exception as e:
+        bot_reply = f"오류 발생: {e}"
     st.session_state.history.append(("bot", bot_reply))
     st.experimental_rerun()
 
-# 초기화 버튼
+# 초기화
 if st.button("대화 초기화"):
     st.session_state.history = []
     st.experimental_rerun()
