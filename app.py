@@ -11,6 +11,7 @@ from google.genai import errors
 SYSTEM_INSTRUCTION = (
     "당신은 친절하고 유용한 일반 AI 어시스턴트입니다. "
     "사용자가 업로드한 파일을 첨부하면, 그 파일의 내용(이미지, 텍스트 등)을 이해하고 질문에 답변하는 데 활용해야 합니다. "
+    "파일은 새로운 파일이 업로드되거나 명시적으로 제거되기 전까지 세션에 첨부된 상태로 유지됩니다. "
     "일반 지식, 분석, 아이디어 등 모든 종류의 질문에 대해 명확하고 정확하며, 도움이 되는 정보를 제공해주세요. "
     "긍정적이고 친근한 태도를 유지하며 답변하세요."
 )
@@ -45,9 +46,9 @@ if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "안녕하세요! 저는 파일을 분석하며 대화할 수 있는 챗봇입니다. 파일을 올리고 질문하시거나, 바로 대화를 시작해주세요!"}
     ]
-# 파일 정보를 임시 저장할 세션 상태 추가
-if "pending_file" not in st.session_state:
-    st.session_state.pending_file = None
+# 파일 정보를 세션에 유지하며 첨부할 상태 추가 (이름 변경: pending_file -> attached_file)
+if "attached_file" not in st.session_state:
+    st.session_state.attached_file = None
 
 # 3. 채팅 기록 표시
 for message in st.session_state.messages:
@@ -61,9 +62,9 @@ uploaded_file = st.file_uploader("여기에 파일(이미지, CSV 등)을 업로
 prompt = st.chat_input("업로드한 파일이나 일반적인 내용에 대해 질문하세요...")
 
 
-# 4-1. 파일이 업로드되었는지 확인하고, 처리할 파일이 없으면 세션 상태에 저장합니다.
-if uploaded_file is not None and st.session_state.pending_file is None:
-    # 4-1-1. 파일 내용을 Base64로 인코딩하고 세션에 임시 저장
+# 4-1. 파일이 업로드되면 세션 상태에 저장합니다. (새 파일은 이전 파일을 덮어씁니다.)
+if uploaded_file is not None:
+    # 4-1-1. 파일 내용을 Base64로 인코딩하고 세션에 첨부된 파일로 저장
     file_bytes = uploaded_file.getvalue()
     mime_type = uploaded_file.type
     
@@ -73,50 +74,46 @@ if uploaded_file is not None and st.session_state.pending_file is None:
 
     base64_encoded_data = base64.b64encode(file_bytes).decode('utf-8')
     
-    st.session_state.pending_file = {
+    # 파일 정보를 세션에 저장
+    st.session_state.attached_file = {
         "data": base64_encoded_data,
         "mimeType": mime_type,
         "name": uploaded_file.name
     }
     # 파일이 성공적으로 준비되었음을 사용자에게 알림
-    st.info(f"✅ **파일 첨부 완료!** `{uploaded_file.name}`. 이제 아래 채팅 입력창에 질문을 입력해주세요.")
+    st.info(f"✅ **파일 첨부 완료!** `{uploaded_file.name}`. 이 파일은 새로운 파일을 업로드하기 전까지 모든 질문에 계속 첨부됩니다. 질문을 입력해주세요.")
+    
+    # 파일을 세션에 유지시키기 위해, UI 파일 위젯만 초기화하여 다음 파일 업로드를 준비합니다.
+    st.session_state.file_uploader = None
+    # UI 변경을 위해 런타임을 다시 시작합니다.
+    st.experimental_rerun()
+
 
 # 4-2. 사용자 입력(프롬프트)이 있을 경우에만 API 호출 실행
 if prompt:
     # API 요청에 포함될 내용물(parts) 리스트 초기화
     contents_parts = []
     
-    # 4-2-1. 텍스트 프롬프트 처리
+    # 4-2-1. 첨부된 파일이 있으면 현재 요청에 추가합니다. (이전과 달리 초기화하지 않음)
+    if st.session_state.attached_file is not None:
+        attached_file = st.session_state.attached_file
+        
+        # 파일 파트 추가 (텍스트 앞에 오도록)
+        contents_parts.append({
+            "inlineData": {
+                "data": attached_file["data"],
+                "mimeType": attached_file["mimeType"]
+            }
+        })
+        # 참고: attached_file 상태는 유지되어 다음 질문에도 계속 포함됩니다.
+    
+    # 4-2-2. 텍스트 프롬프트 처리
     # 사용자 메시지 기록 및 UI 표시
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 4-2-2. 펜딩 파일이 있으면 현재 요청에 추가하고 상태 초기화
-    if st.session_state.pending_file is not None:
-        pending_file = st.session_state.pending_file
-        
-        # 파일 파트 추가 (텍스트 앞에 오도록)
-        contents_parts.append({
-            "inlineData": {
-                "data": pending_file["data"],
-                "mimeType": pending_file["mimeType"]
-            }
-        })
-        
-        # 챗봇이 파일이 첨부되었음을 알도록 메시지에 추가 정보를 포함
-        # 이 정보는 API 호출에만 사용되며, UI history에는 텍스트만 저장됨
-        prompt_with_context = f"[첨부된 파일: {pending_file['name']}] {prompt}"
-        
-        # 파일 상태 초기화 (파일은 한 번의 질문에만 사용됨)
-        st.session_state.pending_file = None
-        # 파일 업로더 위젯 초기화 (다시 파일을 올릴 수 있게)
-        # st.experimental_rerun() # Rerun 대신, prompt 입력 후 파일이 바로 비워지도록 합니다.
-    
-    # Rerun 없이 파일 위젯만 초기화하는 방법
-    uploaded_file = None # 위젯 상태는 st.session_state.file_uploader를 통해 관리되지만, 임시로 변수만 초기화
-    
-    # 텍스트 파트 추가 (파일이 첨부되지 않았으면 일반 프롬프트가 사용됨)
+    # 텍스트 파트 추가 
     contents_parts.append({"text": prompt})
 
 
