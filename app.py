@@ -46,7 +46,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "안녕하세요! 저는 파일을 분석하며 대화할 수 있는 챗봇입니다. 파일을 올리고 질문하시거나, 바로 대화를 시작해주세요!"}
     ]
-# 파일 정보를 세션에 유지하며 첨부할 상태 추가 (이름 변경: pending_file -> attached_file)
+# 파일 정보를 세션에 유지하며 첨부할 상태 추가
 if "attached_file" not in st.session_state:
     st.session_state.attached_file = None
 
@@ -57,12 +57,13 @@ for message in st.session_state.messages:
 
 # 4. 사용자 입력 및 파일 업로드 처리 (멀티모달 기능 재추가)
 
-# 파일 업로더 재추가
+# 파일 업로더 재추가 (st.session_state.file_uploader를 통해 값에 접근)
 uploaded_file = st.file_uploader("여기에 파일(이미지, CSV 등)을 업로드하세요. (선택 사항)", type=None, key="file_uploader")
 prompt = st.chat_input("업로드한 파일이나 일반적인 내용에 대해 질문하세요...")
 
 
 # 4-1. 파일이 업로드되면 세션 상태에 저장합니다. (새 파일은 이전 파일을 덮어씁니다.)
+# 이 로직은 st.experimental_rerun() 없이, 세션 상태를 저장하고 UI만 즉시 초기화하도록 변경되었습니다.
 if uploaded_file is not None:
     # 4-1-1. 파일 내용을 Base64로 인코딩하고 세션에 첨부된 파일로 저장
     file_bytes = uploaded_file.getvalue()
@@ -80,21 +81,23 @@ if uploaded_file is not None:
         "mimeType": mime_type,
         "name": uploaded_file.name
     }
-    # 파일이 성공적으로 준비되었음을 사용자에게 알림
-    st.info(f"✅ **파일 첨부 완료!** `{uploaded_file.name}`. 이 파일은 새로운 파일을 업로드하기 전까지 모든 질문에 계속 첨부됩니다. 질문을 입력해주세요.")
     
-    # 파일을 세션에 유지시키기 위해, UI 파일 위젯만 초기화하여 다음 파일 업로드를 준비합니다.
-    st.session_state.file_uploader = None
-    # UI 변경을 위해 런타임을 다시 시작합니다.
-    st.experimental_rerun()
-
+    # UI 피드백을 표시하기 위해 채팅창에 메시지를 추가합니다.
+    if st.session_state.messages[-1].get("role") != "assistant" or "파일 첨부 완료!" not in st.session_state.messages[-1].get("content", ""):
+        st.session_state.messages.append({"role": "assistant", "content": f"✅ **파일 첨부 완료!** `{uploaded_file.name}`. 이 파일은 새로운 파일을 업로드하기 전까지 모든 질문에 계속 첨부됩니다. 질문을 입력해주세요."})
+    
+    # 파일이 업로드되면, 업로더 위젯의 값만 None으로 설정하여 다음 업로드를 준비합니다.
+    # st.session_state.file_uploader = None 대신, 
+    # Streamlit은 파일이 처리된 후 이 부분을 자동으로 None으로 처리하거나,
+    # prompt 입력 후 자동 rerun을 통해 처리되도록 이 부분을 제거하고 다음 로직에 의존합니다.
+    # st.experimental_rerun() 제거
 
 # 4-2. 사용자 입력(프롬프트)이 있을 경우에만 API 호출 실행
 if prompt:
     # API 요청에 포함될 내용물(parts) 리스트 초기화
     contents_parts = []
     
-    # 4-2-1. 첨부된 파일이 있으면 현재 요청에 추가합니다. (이전과 달리 초기화하지 않음)
+    # 4-2-1. 첨부된 파일이 있으면 현재 요청에 추가합니다. (초기화 로직 없음)
     if st.session_state.attached_file is not None:
         attached_file = st.session_state.attached_file
         
@@ -124,6 +127,7 @@ if prompt:
 
     for message in st.session_state.messages[:-1]: 
         if message["role"] in role_map:
+            # 파일이 첨부된 경우, 해당 메시지는 텍스트만 보냅니다.
             history_to_send.append(
                 {"role": role_map[message["role"]], "parts": [{"text": message["content"]}]}
             )
